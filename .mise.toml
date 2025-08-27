@@ -1,0 +1,74 @@
+# mise configuration
+[tools]
+go = "1.24"
+
+[tasks.build]
+description = "Build the binary"
+run = """
+mkdir -p build
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+go build -ldflags "-X main.version=${VERSION}" -o build/gtauto .
+echo "✅ Build complete: build/gtauto"
+"""
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = """
+rm -rf build
+rm -f gtauto
+echo "🧹 Cleaned build artifacts"
+"""
+
+[tasks.install]
+description = "Install to /usr/local/bin"
+depends = ["build"]
+run = """
+sudo cp build/gtauto /usr/local/bin/
+echo "✅ Installed to /usr/local/bin/gtauto"
+"""
+
+[tasks.test]
+description = "Run tests"
+run = "go test -v -short ./..."
+
+[tasks.fmt]
+description = "Format Go code"
+run = "go fmt ./..."
+
+[tasks.lint]
+description = "Lint Go code"
+run = """
+echo "Running go vet..."
+go vet ./...
+if command -v golangci-lint >/dev/null 2>&1; then
+  echo "Running golangci-lint..."
+  golangci-lint run
+else
+  echo "⚠️  golangci-lint not installed. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"
+fi
+"""
+
+[tasks.dev]
+description = "Run development tasks (fmt, test, lint)"
+run = """
+mise run fmt
+mise run test
+mise run lint
+"""
+
+[tasks.release]
+description = "Build binaries for all platforms"
+run = """
+mkdir -p build
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+echo "Building version ${VERSION} for multiple platforms..."
+
+GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o build/gtauto-darwin-amd64 .
+GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.version=${VERSION}" -o build/gtauto-darwin-arm64 .
+GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o build/gtauto-linux-amd64 .
+GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=${VERSION}" -o build/gtauto-linux-arm64 .
+GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o build/gtauto-windows-amd64.exe .
+
+echo "✅ Built for all platforms in build/"
+ls -lh build/
+"""
