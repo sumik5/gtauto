@@ -11,11 +11,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: false
 
       - name: Extract changelog for release notes
         id: changelog
@@ -44,78 +48,44 @@ jobs:
             echo "See repository for details" > release_notes.md
           fi
 
+      - name: Build binaries
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          mkdir -p dist
+          
+          # Build for all platforms
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o dist/gtauto-linux-amd64 .
+          GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=${VERSION}" -o dist/gtauto-linux-arm64 .
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o dist/gtauto-darwin-amd64 .
+          GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.version=${VERSION}" -o dist/gtauto-darwin-arm64 .
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o dist/gtauto-windows-amd64.exe .
+
+      - name: Create archives
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          cd dist
+          
+          # Create tar.gz archives for Unix systems
+          tar czf gtauto-${VERSION}-linux-amd64.tar.gz gtauto-linux-amd64 ../README.md ../LICENSE ../CHANGELOG.md
+          tar czf gtauto-${VERSION}-linux-arm64.tar.gz gtauto-linux-arm64 ../README.md ../LICENSE ../CHANGELOG.md
+          tar czf gtauto-${VERSION}-darwin-amd64.tar.gz gtauto-darwin-amd64 ../README.md ../LICENSE ../CHANGELOG.md
+          tar czf gtauto-${VERSION}-darwin-arm64.tar.gz gtauto-darwin-arm64 ../README.md ../LICENSE ../CHANGELOG.md
+          
+          # Create zip archive for Windows
+          zip gtauto-${VERSION}-windows-amd64.zip gtauto-windows-amd64.exe ../README.md ../LICENSE ../CHANGELOG.md
+          
+          # List created files
+          ls -lh *.tar.gz *.zip
+
       - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
           body_path: release_notes.md
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
           draft: false
           prerelease: false
-
-  build-and-upload:
-    name: Build and Upload
-    needs: create-release
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - os: linux
-            arch: amd64
-          - os: linux
-            arch: arm64
-          - os: darwin
-            arch: amd64
-          - os: darwin
-            arch: arm64
-          - os: windows
-            arch: amd64
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: false
-
-      - name: Get version from tag
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Build binary
-        env:
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-        run: |
-          output_name="gtauto-${{ matrix.os }}-${{ matrix.arch }}"
-          if [ "${{ matrix.os }}" = "windows" ]; then
-            output_name="${output_name}.exe"
-          fi
-          go build -ldflags "-X main.version=${{ env.VERSION }}" -v -o "${output_name}" .
-
-      - name: Create archive
-        run: |
-          archive_name="gtauto-${{ env.VERSION }}-${{ matrix.os }}-${{ matrix.arch }}"
-          if [ "${{ matrix.os }}" = "windows" ]; then
-            zip "${archive_name}.zip" "gtauto-${{ matrix.os }}-${{ matrix.arch }}.exe" README.md LICENSE CHANGELOG.md
-            echo "ASSET_NAME=${archive_name}.zip" >> $GITHUB_ENV
-            echo "ASSET_PATH=${archive_name}.zip" >> $GITHUB_ENV
-          else
-            tar czf "${archive_name}.tar.gz" "gtauto-${{ matrix.os }}-${{ matrix.arch }}" README.md LICENSE CHANGELOG.md
-            echo "ASSET_NAME=${archive_name}.tar.gz" >> $GITHUB_ENV
-            echo "ASSET_PATH=${archive_name}.tar.gz" >> $GITHUB_ENV
-          fi
-
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ${{ env.ASSET_PATH }}
-          asset_name: ${{ env.ASSET_NAME }}
-          asset_content_type: application/octet-stream
