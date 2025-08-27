@@ -72,3 +72,4 @@ GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=${VERSION}" -o buil
 echo "✅ Built for all platforms in build/"
 ls -lh build/
 """
+

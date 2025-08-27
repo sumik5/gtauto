@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract changelog for release notes
+        id: changelog
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          # Extract the changelog section for this version
+          if [ -f "CHANGELOG.md" ]; then
+            awk -v tag="$TAG" '
+              /^## \[/ {
+                if (found) exit;
+                if (index($0, tag) > 0) found=1;
+              }
+              found && /^## \[/ && !first { first=1; next; }
+              found { print }
+            ' CHANGELOG.md > release_notes.md
+            
+            if [ -s release_notes.md ]; then
+              echo "Release notes extracted from CHANGELOG.md"
+              cat release_notes.md
+            else
+              echo "No specific changelog entry found for $TAG"
+              echo "See CHANGELOG.md for details" > release_notes.md
+            fi
+          else
+            echo "CHANGELOG.md not found"
+            echo "See repository for details" > release_notes.md
+          fi
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+
+  build-and-upload:
+    name: Build and Upload
+    needs: create-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+          - os: windows
+            arch: amd64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Get version from tag
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          output_name="gtauto-${{ matrix.os }}-${{ matrix.arch }}"
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            output_name="${output_name}.exe"
+          fi
+          go build -ldflags "-X main.version=${{ env.VERSION }}" -v -o "${output_name}" .
+
+      - name: Create archive
+        run: |
+          archive_name="gtauto-${{ env.VERSION }}-${{ matrix.os }}-${{ matrix.arch }}"
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            zip "${archive_name}.zip" "gtauto-${{ matrix.os }}-${{ matrix.arch }}.exe" README.md LICENSE CHANGELOG.md
+            echo "ASSET_NAME=${archive_name}.zip" >> $GITHUB_ENV
+            echo "ASSET_PATH=${archive_name}.zip" >> $GITHUB_ENV
+          else
+            tar czf "${archive_name}.tar.gz" "gtauto-${{ matrix.os }}-${{ matrix.arch }}" README.md LICENSE CHANGELOG.md
+            echo "ASSET_NAME=${archive_name}.tar.gz" >> $GITHUB_ENV
+            echo "ASSET_PATH=${archive_name}.tar.gz" >> $GITHUB_ENV
+          fi
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ${{ env.ASSET_PATH }}
+          asset_name: ${{ env.ASSET_NAME }}
+          asset_content_type: application/octet-stream
